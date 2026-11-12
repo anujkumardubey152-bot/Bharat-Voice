@@ -62,5 +62,5 @@ def get_settings() -> Settings:
     return Settings(
         gnani_key=_secret("GNANI_API_KEY"),
         gemini_key=_secret("GEMINI_API_KEY"),
-        gemini_model=_secret("GEMINI_MODEL", "gemini-2.5-flash"),
+        gemini_model=_secret("GEMINI_MODEL", "gemini-3.8-flash"),
     )
