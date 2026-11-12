@@ -8,6 +8,7 @@ from services.http import post_with_retry
 ROOT = "https://generativelanguage.googleapis.com/v1beta"
 BASE = ROOT + "/models/{model}:generateContent"
 _BAD = ("image", "tts", "live", "audio", "embedding", "robotics", "computer", "lite", "vision", "aqa")
+FALLBACKS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3-flash-preview")
 _found = {}  # api key -> discovered model name (kept in memory only)
 
 SYSTEM = (
@@ -27,12 +28,11 @@ def build_payload(history, lang_label):
     return {
         "system_instruction": {"parts": [{"text": SYSTEM.format(lang=hint)}]},
         "contents": contents,
-        "generationConfig": {"temperature": 0.6, "maxOutputTokens": 1024},
+        "generationConfig": {"temperature": 0.6, "maxOutputTokens": 2048},
     }
 
 
 def pick_model(models):
-    """models: list of dicts from models.list. Prefer a stable 'flash' text model that supports generateContent."""
     names = [m["name"].split("/", 1)[-1] for m in models
              if "generateContent" in m.get("supportedGenerationMethods", [])]
     names = [n for n in names if n.startswith("gemini") and not any(b in n for b in _BAD)]
@@ -64,18 +64,23 @@ def _call(model, history, lang_label, api_key):
 def reply(history, lang_label, api_key, model):
     if not api_key:
         raise ServiceError("Gemini API key is missing. Add GEMINI_API_KEY in settings.")
-    model = _found.get(api_key, model)
-    r = _call(model, history, lang_label, api_key)
-    if r.status_code == 404:
+    tried = [_found.get(api_key, model)] + [m for m in FALLBACKS if m != model]
+    r = None
+    for m in tried:
+        r = _call(m, history, lang_label, api_key)
+        if r.status_code != 404:
+            _found[api_key] = m
+            break
+    else:
         alt = discover_model(api_key)
-        if not alt or alt == model:
-            raise ServiceError("Gemini model not found for this key. Create a new key at aistudio.google.com/apikey "
-                               "(it starts with AIza) and put it in GEMINI_API_KEY.")
+        if not alt or alt in tried:
+            raise ServiceError("No Gemini model was found for this key. Set GEMINI_MODEL to a current model name "
+                               "from ai.google.dev/gemini-api/docs/models (for example gemini-3.8-flash).")
         _found[api_key] = alt
         r = _call(alt, history, lang_label, api_key)
     if r.status_code in (400, 401, 403):
-        raise ServiceError(f"Gemini rejected the request (HTTP {r.status_code}). Check GEMINI_API_KEY. "
-                           "Use a key from aistudio.google.com/apikey.")
+        raise ServiceError(f"Gemini rejected the request (HTTP {r.status_code}). Check GEMINI_API_KEY "
+                           "(a key from aistudio.google.com/apikey; AQ. keys are valid).")
     if r.status_code != 200:
         raise ServiceError(f"Gemini failed (HTTP {r.status_code}). Please try again.")
     try:
